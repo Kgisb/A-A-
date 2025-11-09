@@ -5,15 +5,18 @@ import altair as alt
 from difflib import SequenceMatcher
 from datetime import time, datetime, date, timedelta
 
-APP_TITLE = "📞 TalkTime App — v3.9 (Pre-loaded calling_DB.csv)"
+# ------------------------------------------------
+# CONFIG
+# ------------------------------------------------
+APP_TITLE = "📞 TalkTime App — Fixed (Pre-loaded calling_DB.csv)"
 TZ = "Asia/Kolkata"
-DATA_PATH = "calling_DB.csv"  # Ensure this file is placed with the app, or update this path.
+DATA_PATH = "calling_DB.csv"   # <--- keep this CSV beside this script or change path.
 
 st.set_page_config(page_title="TalkTime App", layout="wide")
 
-# --------------------
-# Helpers
-# --------------------
+# ------------------------------------------------
+# HELPERS
+# ------------------------------------------------
 
 def to_seconds(x):
     if pd.isna(x):
@@ -21,6 +24,7 @@ def to_seconds(x):
     if isinstance(x, (int, float)) and not isinstance(x, bool):
         return float(x)
     s = str(x).strip()
+    # try plain number
     try:
         return float(s)
     except:
@@ -47,17 +51,18 @@ def combine_date_time(date_col, time_col):
     d = parse_date_best(date_col)
     t_try = pd.to_datetime(time_col, errors="coerce")
     t = t_try.dt.time if hasattr(t_try, "dt") else None
-    cat = pd.DataFrame({
-        "d": d.dt.date.astype(str),
-        "t": pd.Series(t, index=d.index, dtype="object").astype(str)
-    }).agg(" ".join, axis=1)
+    cat = pd.DataFrame(
+        {"d": d.dt.date.astype(str),
+         "t": pd.Series(t, index=d.index, dtype="object").astype(str)}
+    ).agg(" ".join, axis=1)
     dt = pd.to_datetime(cat, errors="coerce")
     try:
+        dt_local = dt.dt.tz_localize(TZ, nonexistent="NaT", ambiguous="NaT")
+    except Exception:
+        # if already tz-aware or anything odd, just coerce
         dt_local = pd.to_datetime(dt, errors="coerce").dt.tz_localize(
             TZ, nonexistent="NaT", ambiguous="NaT"
         )
-    except Exception:
-        dt_local = pd.NaT
     return dt_local
 
 def norm_name(s):
@@ -83,8 +88,7 @@ def fuzzy_match_any(name, targets_norm, ratio_cut=0.85):
             continue
         if t in n or n in t:
             return True
-        t_tokens = t.split()
-        if any(tok and tok in n for tok in t_tokens):
+        if any(tok and tok in n for tok in t.split()):
             return True
         if SequenceMatcher(None, n, t).ratio() >= ratio_cut:
             return True
@@ -100,6 +104,9 @@ def clean_str_col(series):
         return s
 
 def agg_summary(df, dims, duration_field):
+    if df.empty:
+        return pd.DataFrame(columns=dims + ["Total Calls", "Total Duration (sec)",
+                                            "Avg Duration (sec)", "Median Duration (sec)"])
     res = (
         df.groupby(dims, dropna=False)[duration_field]
         .agg(["count", "sum", "mean", "median"])
@@ -120,12 +127,14 @@ def agg_summary(df, dims, duration_field):
     return res
 
 def download_df(df, filename, label="Download CSV"):
+    if df is None or df.empty:
+        return
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button(label, csv, file_name=filename, mime="text/csv")
 
-# --------------------
-# Teams (unchanged)
-# --------------------
+# ------------------------------------------------
+# TEAM DEFINITIONS
+# ------------------------------------------------
 B2C_TARGETS_RAW = [
     "Kamaldeep singh",
     "Ria Arora",
@@ -142,24 +151,67 @@ B2C_TARGETS_RAW = [
     "Vikas Jha",
 ]
 MT_TARGETS_RAW = ["AYUSHMAN"]
+
 B2C_TARGETS = [norm_name(x) for x in B2C_TARGETS_RAW]
 MT_TARGETS = [norm_name(x) for x in MT_TARGETS_RAW]
 
-# --------------------
-# Layout & Sidebar
-# --------------------
+def mask_for_targets(frame, col, targets_norm):
+    if col not in frame.columns:
+        return pd.Series(False, index=frame.index)
+    return frame[col].apply(lambda x: fuzzy_match_any(x, targets_norm))
+
+# ------------------------------------------------
+# LOAD DATA (FIXED FILE)
+# ------------------------------------------------
+
+try:
+    df = pd.read_csv(DATA_PATH, low_memory=False)
+except Exception as e:
+    st.error(f"❌ Could not load `{DATA_PATH}`. Please ensure it's present.\n\nError: {e}")
+    st.stop()
+
+# Basic cleaning
+for col in ["Caller", "Country Name", "Call Type", "Call Status"]:
+    if col in df.columns:
+        df[col] = clean_str_col(df[col])
+
+df["_duration_sec"] = df["Call Duration"].apply(to_seconds) if "Call Duration" in df.columns else np.nan
+
+# robust date
+df["_date_parsed"] = parse_date_best(df["Date"]) if "Date" in df.columns else pd.NaT
+df["_date_only"] = df["_date_parsed"].dt.date
+
+# combined datetime
+if {"Date", "Time"}.issubset(df.columns):
+    df["_dt_local"] = combine_date_time(df["Date"], df["Time"])
+    df["_hour"] = df["_dt_local"].dt.hour
+else:
+    df["_dt_local"] = pd.NaT
+    df["_hour"] = np.nan
+
+# figure data range (this is the key fix)
+if df["_date_only"].notna().any():
+    data_min = df["_date_only"].min()
+    data_max = df["_date_only"].max()
+else:
+    data_min = date.today()
+    data_max = date.today()
+
+# ------------------------------------------------
+# SIDEBAR
+# ------------------------------------------------
 
 st.title(APP_TITLE)
 
 with st.sidebar:
     st.header("Data Source")
-    st.caption("Using pre-loaded **calling_DB.csv** from backend (no manual upload).")
+    st.caption(f"Using pre-loaded **{DATA_PATH}** (no manual upload).")
+    st.caption(f"Data window: **{data_min} → {data_max}**")
 
     st.header("1) Agent Set")
     team_mode = st.radio(
         "Analyze:",
         ["All agents", "B2C team only", "MT Team only"],
-        help="MT Team corresponds to MD; currently includes AYUSHMAN (fuzzy matched).",
     )
 
     st.header("2) Calls Mode")
@@ -174,152 +226,98 @@ with st.sidebar:
         300,
         60,
         5,
-        help="Used when filtering calls by minimum duration.",
     )
 
     st.header("3) Period (IST)")
-    preset = st.radio("Pick a range", ["Today", "Yesterday", "Custom"], index=0)
+    preset = st.radio(
+        "Pick a range",
+        ["Today (max file date)", "Yesterday (vs file)", "Custom"],
+        index=0,
+    )
 
-    st.caption("Refine by time within the selected date window (IST).")
-    if preset in ["Today", "Yesterday"]:
-        t_start = st.time_input("Start time", value=time(0, 0, 0))
-        t_end = st.time_input("End time", value=time(23, 59, 59))
-        custom_dates = None
-    else:
-        default_start = date.today() - timedelta(days=6)
-        default_end = date.today()
+    if preset == "Custom":
+        default_start = data_min
+        default_end = data_max
         custom_dates = st.date_input(
             "Custom dates (Start & End, inclusive)",
             value=(default_start, default_end),
         )
-        t_start = st.time_input("Start time", value=time(0, 0, 0), key="ct_start")
-        t_end = st.time_input("End time", value=time(23, 59, 59), key="ct_end")
+    else:
+        custom_dates = None
+
+    # Time within chosen days
+    st.caption("Time range within selected dates:")
+    t_start = st.time_input("Start time", value=time(0, 0, 0), key="t_start")
+    t_end = st.time_input("End time", value=time(23, 59, 59), key="t_end")
 
     include_missing_time = st.checkbox(
-        "Include rows with missing Time within the date window",
+        "Include rows with missing Time (use Date only)",
         value=True,
     )
 
     st.header("4) Filters")
     include_missing = st.checkbox(
-        "Include rows with missing values for selected filters",
+        "Include blank values for filtered columns",
         value=True,
-        help=(
-            "When ON, rows with blank Agent/Country/Type/Status are kept "
-            "even if filters are applied."
-        ),
     )
-    st.caption("Filter pickers appear after data load.")
 
-# --------------------
-# Load & Prepare (from fixed file)
-# --------------------
-
-try:
-    df = pd.read_csv(DATA_PATH, low_memory=False)
-except Exception as e:
-    st.error(
-        f"Failed to read pre-loaded data file.\n\n"
-        f"Expected file: `{DATA_PATH}`\nError: {e}"
-    )
-    st.stop()
-
-# Basic cleaning
-for col in ["Caller", "Country Name", "Call Type", "Call Status"]:
-    if col in df.columns:
-        df[col] = clean_str_col(df[col])
-
-df["_duration_sec"] = (
-    df["Call Duration"].apply(to_seconds)
-    if "Call Duration" in df.columns
-    else np.nan
-)
-df["_date_only_full"] = (
-    parse_date_best(df["Date"]) if "Date" in df.columns else pd.NaT
-)
-df["_date_only"] = pd.to_datetime(df["_date_only_full"]).dt.date
-
-if {"Date", "Time"}.issubset(df.columns):
-    df["_dt_local"] = combine_date_time(df["Date"], df["Time"])
-    df["_hour"] = df["_dt_local"].dt.hour
-else:
-    df["_dt_local"] = pd.NaT
-    df["_hour"] = np.nan
-
-# Sidebar filters based on loaded data
-with st.sidebar:
+    # dynamic filter selects
     if "Caller" in df.columns:
-        agents = (
-            sorted(df["Caller"].dropna().astype(str).unique().tolist())
-            if not df["Caller"].dropna().empty
-            else []
-        )
-        sel_agents = st.multiselect(
-            "Agent(s)", agents, default=agents if agents else []
-        )
+        agents = sorted(df["Caller"].dropna().astype(str).unique().tolist())
+        sel_agents = st.multiselect("Agent(s)", agents, default=agents)
     else:
         sel_agents = None
 
     if "Country Name" in df.columns:
-        countries = (
-            sorted(df["Country Name"].dropna().astype(str).unique().tolist())
-            if not df["Country Name"].dropna().empty
-            else []
-        )
-        sel_countries = st.multiselect(
-            "Country(ies)", countries, default=countries if countries else []
-        )
+        countries = sorted(df["Country Name"].dropna().astype(str).unique().tolist())
+        sel_countries = st.multiselect("Country(ies)", countries, default=countries)
     else:
         sel_countries = None
 
     if "Call Type" in df.columns:
-        call_types = (
-            sorted(df["Call Type"].dropna().astype(str).unique().tolist())
-            if not df["Call Type"].dropna().empty
-            else []
-        )
-        sel_types = st.multiselect(
-            "Call Type(s) (optional)",
-            call_types,
-            default=call_types if call_types else [],
-        )
+        call_types = sorted(df["Call Type"].dropna().astype(str).unique().tolist())
+        sel_types = st.multiselect("Call Type(s)", call_types, default=call_types)
     else:
         sel_types = None
 
     if "Call Status" in df.columns:
-        statuses = (
-            sorted(df["Call Status"].dropna().astype(str).unique().tolist())
-            if not df["Call Status"].dropna().empty
-            else []
-        )
-        sel_status = st.multiselect(
-            "Call Status",
-            statuses,
-            default=statuses if statuses else [],
-        )
+        statuses = sorted(df["Call Status"].dropna().astype(str).unique().tolist())
+        sel_status = st.multiselect("Call Status", statuses, default=statuses)
     else:
         sel_status = None
 
-# --------------------
-# Date+Time window (IST)
-# --------------------
+# ------------------------------------------------
+# DATE + TIME FILTER (USING FILE DATES)
+# ------------------------------------------------
 
-now = pd.Timestamp.now(tz=TZ)
-if preset == "Today":
-    start_date = now.date()
-    end_date = now.date()
-elif preset == "Yesterday":
-    start_date = (now - pd.Timedelta(days=1)).date()
-    end_date = start_date
+if preset == "Today (max file date)":
+    start_date = data_max
+    end_date = data_max
+elif preset == "Yesterday (vs file)":
+    start_date = data_max - timedelta(days=1)
+    end_date = data_max - timedelta(days=1)
 else:
+    # Custom
     if isinstance(custom_dates, (list, tuple)) and len(custom_dates) == 2:
-        start_date, end_date = custom_dates[0], custom_dates[1]
+        start_date, end_date = custom_dates
     else:
-        st.warning("Please pick **two dates** (Start & End) for Custom.")
-        start_date, end_date = (date.today(), date.today())
+        start_date, end_date = data_min, data_max
 
-start_dt = pd.Timestamp.combine(start_date, t_start).tz_localize(TZ)
-end_dt = pd.Timestamp.combine(end_date, t_end).tz_localize(TZ)
+# clamp to file range
+if start_date < data_min:
+    start_date = data_min
+if end_date > data_max:
+    end_date = data_max
+
+# ensure order
+if end_date < start_date:
+    end_date = start_date
+
+start_dt = datetime.combine(start_date, t_start).replace(tzinfo=None)
+end_dt = datetime.combine(end_date, t_end).replace(tzinfo=None)
+
+start_dt = pd.Timestamp(start_dt).tz_localize(TZ)
+end_dt = pd.Timestamp(end_dt).tz_localize(TZ)
 
 df_f = df.copy()
 
@@ -333,8 +331,10 @@ else:
     dt_mask = pd.Series(False, index=df_f.index)
 
 date_mask = (
-    pd.to_datetime(df_f["_date_only"]) >= pd.to_datetime(start_date)
-) & (pd.to_datetime(df_f["_date_only"]) <= pd.to_datetime(end_date))
+    df_f["_date_only"].notna()
+    & (df_f["_date_only"] >= start_date)
+    & (df_f["_date_only"] <= end_date)
+)
 
 if include_missing_time:
     final_time_mask = dt_mask | (df_f["_dt_local"].isna() & date_mask)
@@ -343,58 +343,56 @@ else:
 
 df_f = df_f[final_time_mask].copy()
 
-# --------------------
-# Team filter
-# --------------------
-
-def mask_for_targets(frame, col, targets_norm):
-    if col not in frame.columns:
-        return pd.Series(False, index=frame.index)
-    return frame[col].apply(lambda x: fuzzy_match_any(x, targets_norm))
-
+# ------------------------------------------------
+# TEAM FILTER
+# ------------------------------------------------
 if team_mode == "B2C team only":
-    mask_team = mask_for_targets(df_f, "Caller", B2C_TARGETS)
+    m = mask_for_targets(df_f, "Caller", B2C_TARGETS)
     if include_missing:
-        mask_team = mask_team | df_f["Caller"].isna()
-    df_f = df_f[mask_team].copy()
+        m = m | df_f["Caller"].isna()
+    df_f = df_f[m].copy()
 elif team_mode == "MT Team only":
-    mask_team = mask_for_targets(df_f, "Caller", MT_TARGETS)
+    m = mask_for_targets(df_f, "Caller", MT_TARGETS)
     if include_missing:
-        mask_team = mask_team | df_f["Caller"].isna()
-    df_f = df_f[mask_team].copy()
+        m = m | df_f["Caller"].isna()
+    df_f = df_f[m].copy()
 
-# --------------------
-# Remaining filters
-# --------------------
-
-def _apply_filter(frame, col, selections):
+# ------------------------------------------------
+# COLUMN FILTERS
+# ------------------------------------------------
+def apply_filter(frame, col, selections):
     if selections is None or col not in frame.columns:
         return frame
     if len(selections) == 0:
         return frame
+    col_vals = frame[col].astype(str)
     if include_missing:
-        return frame[
-            frame[col].astype(str).isin(selections) | frame[col].isna()
-        ]
+        return frame[col_vals.isin(selections) | frame[col].isna()]
     else:
-        return frame[frame[col].astype(str).isin(selections)]
+        return frame[col_vals.isin(selections)]
 
-df_f = _apply_filter(df_f, "Caller", sel_agents)
-df_f = _apply_filter(df_f, "Country Name", sel_countries)
-df_f = _apply_filter(df_f, "Call Type", sel_types)
-df_f = _apply_filter(df_f, "Call Status", sel_status)
+df_f = apply_filter(df_f, "Caller", sel_agents)
+df_f = apply_filter(df_f, "Country Name", sel_countries)
+df_f = apply_filter(df_f, "Call Type", sel_types)
+df_f = apply_filter(df_f, "Call Status", sel_status)
 
-# Mode filter
-if mode.startswith("Only calls"):
+# Calls mode
+if mode.startswith("Only"):
     df_view = df_f[df_f["_duration_sec"] >= float(threshold)].copy()
 else:
     df_view = df_f.copy()
 
-# --------------------
-# KPIs
-# --------------------
-
+# ------------------------------------------------
+# OVERVIEW KPIs
+# ------------------------------------------------
 st.subheader("Overview")
+
+if df_view.empty:
+    st.warning(
+        "No records in the selected filters/date-time window. "
+        "Try expanding the date range (e.g., Today/Yesterday vs file, or full Custom)."
+    )
+
 k1, k2, k3, k4 = st.columns(4)
 k1.metric("Total Calls", f"{len(df_view):,}")
 k2.metric(
@@ -409,150 +407,120 @@ k3.metric(
     if df_view["_duration_sec"].notna().any()
     else "NA",
 )
-k4.metric(
-    "Agents",
-    df_view["Caller"].nunique() if "Caller" in df_view.columns else 0,
-)
+k4.metric("Agents", df_view["Caller"].nunique() if "Caller" in df_view.columns else 0)
 
 st.caption(
     f"Team: **{team_mode}** | Calls: **{mode}** | "
     f"Threshold: **{threshold}s** | "
-    f"Window: **{start_dt.strftime('%Y-%m-%d %H:%M')} → {end_dt.strftime('%Y-%m-%d %H:%M')} IST** | "
-    f"Include missing Time: **{include_missing_time}**"
+    f"Window: **{start_dt.strftime('%Y-%m-%d %H:%M')} → {end_dt.strftime('%Y-%m-%d %H:%M')} IST**"
 )
 
-# --------------------
-# Tabs
-# --------------------
-
+# ------------------------------------------------
+# TABS
+# ------------------------------------------------
 tab1, tab2, tab3, tab4 = st.tabs(
-    [
-        "Agent-wise (Agent)",
-        "Country-wise",
-        "Agent × Country",
-        "24h Engagement",
-    ]
+    ["Agent-wise", "Country-wise", "Agent × Country", "24h Engagement"]
 )
 
 with tab1:
-    st.markdown("### Agent-wise — Total number of calls and durations")
+    st.markdown("### Agent-wise Summary")
     if "Caller" in df_view.columns:
         agg = agg_summary(df_view, ["Caller"], "_duration_sec")
         st.dataframe(agg, use_container_width=True)
         download_df(agg, "agent_wise_calls.csv")
-        chart = (
-            alt.Chart(agg)
-            .mark_bar()
-            .encode(
-                x=alt.X("Caller:N", sort="-y", title="Agent"),
-                y=alt.Y("Total Calls:Q"),
-                tooltip=[
-                    "Caller",
-                    "Total Calls",
-                    "Total Duration (sec)",
-                    "Avg Duration (sec)",
-                    "Median Duration (sec)",
-                ],
+        if not agg.empty:
+            chart = (
+                alt.Chart(agg)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Caller:N", sort="-y", title="Agent"),
+                    y=alt.Y("Total Calls:Q"),
+                    tooltip=[
+                        "Caller",
+                        "Total Calls",
+                        "Total Duration (sec)",
+                        "Avg Duration (sec)",
+                        "Median Duration (sec)",
+                    ],
+                )
+                .properties(height=360)
+                .interactive()
             )
-            .properties(height=360)
-            .interactive()
-        )
-        st.altair_chart(chart, use_container_width=True)
+            st.altair_chart(chart, use_container_width=True)
     else:
-        st.info("Column 'Caller' (Agent) missing in data.")
+        st.info("Missing 'Caller' column.")
 
 with tab2:
-    st.markdown("### Country-wise — Total number of calls and durations")
+    st.markdown("### Country-wise Summary")
     if "Country Name" in df_view.columns:
         agg = agg_summary(df_view, ["Country Name"], "_duration_sec")
         st.dataframe(agg, use_container_width=True)
         download_df(agg, "country_wise_calls.csv")
-        chart = (
-            alt.Chart(agg)
-            .mark_bar()
-            .encode(
-                x=alt.X("Country Name:N", sort="-y", title="Country"),
-                y=alt.Y("Total Calls:Q"),
-                tooltip=[
-                    "Country Name",
-                    "Total Calls",
-                    "Total Duration (sec)",
-                    "Avg Duration (sec)",
-                    "Median Duration (sec)",
-                ],
+        if not agg.empty:
+            chart = (
+                alt.Chart(agg)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Country Name:N", sort="-y", title="Country"),
+                    y=alt.Y("Total Calls:Q"),
+                    tooltip=[
+                        "Country Name",
+                        "Total Calls",
+                        "Total Duration (sec)",
+                        "Avg Duration (sec)",
+                        "Median Duration (sec)",
+                    ],
+                )
+                .properties(height=360)
+                .interactive()
             )
-            .properties(height=360)
-            .interactive()
-        )
-        st.altair_chart(chart, use_container_width=True)
+            st.altair_chart(chart, use_container_width=True)
     else:
-        st.info("Column 'Country Name' missing in data.")
+        st.info("Missing 'Country Name' column.")
 
 with tab3:
-    st.markdown("### Agent × Country — Matrix")
+    st.markdown("### Agent × Country Matrix")
     if {"Caller", "Country Name"}.issubset(df_view.columns):
-        agg = agg_summary(
-            df_view, ["Caller", "Country Name"], "_duration_sec"
-        )
+        agg = agg_summary(df_view, ["Caller", "Country Name"], "_duration_sec")
         st.dataframe(agg, use_container_width=True)
         download_df(agg, "agent_country_matrix.csv")
-        chart = (
-            alt.Chart(agg)
-            .mark_bar()
-            .encode(
-                x=alt.X(
-                    "Caller:N",
-                    sort=alt.SortField(
-                        "Total Calls", order="descending"
-                    ),
-                    title="Agent",
-                ),
-                y=alt.Y("Total Calls:Q"),
-                color=alt.Color("Country Name:N", title="Country"),
-                tooltip=[
-                    "Caller",
-                    "Country Name",
-                    "Total Calls",
-                    "Total Duration (sec)",
-                ],
+        if not agg.empty:
+            chart = (
+                alt.Chart(agg)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Caller:N", sort="-y", title="Agent"),
+                    y=alt.Y("Total Calls:Q"),
+                    color=alt.Color("Country Name:N", title="Country"),
+                    tooltip=[
+                        "Caller",
+                        "Country Name",
+                        "Total Calls",
+                        "Total Duration (sec)",
+                    ],
+                )
+                .properties(height=380)
+                .interactive()
             )
-            .properties(height=380)
-            .interactive()
-        )
-        st.altair_chart(chart, use_container_width=True)
+            st.altair_chart(chart, use_container_width=True)
     else:
-        st.info(
-            "Need both 'Caller' (Agent) and 'Country Name' in data "
-            "for this view."
-        )
+        st.info("Need both 'Caller' and 'Country Name' for this view.")
 
 with tab4:
-    st.markdown(
-        "### 24h Engagement — When do agents attempt calls, and for which country?"
-    )
-    if "_hour" in df_f.columns:
-        df_time = df_f.dropna(subset=["_hour"])
-    else:
-        df_time = pd.DataFrame(columns=df_f.columns)
-
-    if not df_time.empty and df_time["_hour"].notna().any():
+    st.markdown("### 24h Engagement")
+    df_time = df_view.dropna(subset=["_hour"]) if "_hour" in df_view.columns else pd.DataFrame()
+    if not df_time.empty:
         attempts = (
-            df_time.groupby("_hour", dropna=False)
-            .size()
+            df_time.groupby("_hour").size()
             .reset_index(name="Attempts")
             .rename(columns={"_hour": "Hour"})
         )
 
         c1, c2 = st.columns(2)
         with c1:
-            st.dataframe(
-                attempts.sort_values("Hour"),
-                use_container_width=True,
-            )
-            download_df(
-                attempts.sort_values("Hour"),
-                "attempts_by_hour.csv",
-            )
+            st.dataframe(attempts.sort_values("Hour"), use_container_width=True)
+            download_df(attempts.sort_values("Hour"), "attempts_by_hour.csv")
+
         with c2:
             chart = (
                 alt.Chart(attempts)
@@ -569,10 +537,10 @@ with tab4:
             st.altair_chart(chart, use_container_width=True)
 
         st.divider()
-        st.markdown("**Bubble: Hour vs Country (Attempts)**")
         if "Country Name" in df_time.columns:
+            st.markdown("**Hour × Country (Bubble)**")
             a2 = (
-                df_time.groupby(["_hour", "Country Name"], dropna=False)
+                df_time.groupby(["_hour", "Country Name"])
                 .size()
                 .reset_index(name="Attempts")
                 .rename(columns={"_hour": "Hour"})
@@ -584,26 +552,20 @@ with tab4:
                     x=alt.X("Hour:O"),
                     y=alt.Y("Country Name:N", title="Country"),
                     size=alt.Size("Attempts:Q", legend=None),
-                    tooltip=[
-                        "Hour:O",
-                        "Country Name:N",
-                        "Attempts:Q",
-                    ],
+                    tooltip=["Hour:O", "Country Name:N", "Attempts:Q"],
                 )
                 .properties(height=420)
                 .interactive()
             )
             st.altair_chart(bubble, use_container_width=True)
-            download_df(
-                a2.sort_values(["Country Name", "Hour"]),
-                "hour_country_bubble.csv",
-            )
+            download_df(a2.sort_values(["Country Name", "Hour"]),
+                        "hour_country_bubble.csv")
 
         st.divider()
-        st.markdown("**Heatmap: Agent × Hour (Attempts)**")
         if "Caller" in df_time.columns:
+            st.markdown("**Agent × Hour (Heatmap)**")
             hh = (
-                df_time.groupby(["Caller", "_hour"], dropna=False)
+                df_time.groupby(["Caller", "_hour"])
                 .size()
                 .reset_index(name="Attempts")
                 .rename(columns={"_hour": "Hour"})
@@ -621,16 +583,12 @@ with tab4:
                 .interactive()
             )
             st.altair_chart(heat, use_container_width=True)
-            download_df(
-                hh.sort_values(["Caller", "Hour"]),
-                "agent_hour_heatmap.csv",
-            )
+            download_df(hh.sort_values(["Caller", "Hour"]),
+                        "agent_hour_heatmap.csv")
     else:
-        st.info(
-            "No valid Time values to compute 24h engagement; "
-            "counts/tables still use Date-based logic."
-        )
+        st.info("No valid time data in current filter to show 24h engagement.")
 
 st.caption(
-    "v3.9: Data source fixed to pre-loaded calling_DB.csv; no manual upload required."
+    "Note: 'Today' and 'Yesterday' are based on the latest date inside calling_DB.csv, "
+    "so you always see live data without touching the code."
 )
