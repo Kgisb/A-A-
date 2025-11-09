@@ -156,10 +156,10 @@ def download_df(df, filename, label="Download CSV"):
     st.download_button(label, csv, file_name=filename, mime="text/csv")
 
 # ------------------------------------------------
-# TEAM DEFINITIONS (UPDATED)
+# TEAM DEFINITIONS (EXACT NAMES, FUZZY MATCHING)
 # ------------------------------------------------
 
-# B2C team
+# B2C team (exact spelling as provided)
 B2C_TARGETS_RAW = [
     "Aniket Srivastava",
     "Ankush Kumar",
@@ -173,7 +173,7 @@ B2C_TARGETS_RAW = [
     "Vikas",
 ]
 
-# MT team (only these)
+# MT team (exact spelling as provided)
 MT_TARGETS_RAW = [
     "Niharika Mainali",
     "Ruhi Sharma",
@@ -183,6 +183,7 @@ MT_TARGETS_RAW = [
     "Shujaat Shafqat",
 ]
 
+# Normalized versions used ONLY for fuzzy matching logic
 B2C_TARGETS = [norm_name(x) for x in B2C_TARGETS_RAW]
 MT_TARGETS = [norm_name(x) for x in MT_TARGETS_RAW]
 
@@ -670,7 +671,7 @@ with tab4:
         st.info("No valid time data in current filter to show 24h engagement.")
 
 st.caption(
-    "Teams mapped as per latest list. "
+    "Teams use exact names as provided, with fuzzy matching on data values. "
     "Durations: Total Duration (hr), Avg/Median Duration (min). "
     "24h Engagement Bubble & Heatmap respect Attempts ≥ N."
 )
