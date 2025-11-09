@@ -10,7 +10,7 @@ from datetime import time, datetime, date, timedelta
 # ------------------------------------------------
 APP_TITLE = "📞 TalkTime App — Fixed (Pre-loaded calling_DB.csv)"
 TZ = "Asia/Kolkata"
-DATA_PATH = "calling_DB.csv"   # <--- keep this CSV beside this script or change path.
+DATA_PATH = "calling_DB.csv"   # keep this CSV beside this script or change path.
 
 st.set_page_config(page_title="TalkTime App", layout="wide")
 
@@ -24,7 +24,6 @@ def to_seconds(x):
     if isinstance(x, (int, float)) and not isinstance(x, bool):
         return float(x)
     s = str(x).strip()
-    # try plain number
     try:
         return float(s)
     except:
@@ -59,7 +58,6 @@ def combine_date_time(date_col, time_col):
     try:
         dt_local = dt.dt.tz_localize(TZ, nonexistent="NaT", ambiguous="NaT")
     except Exception:
-        # if already tz-aware or anything odd, just coerce
         dt_local = pd.to_datetime(dt, errors="coerce").dt.tz_localize(
             TZ, nonexistent="NaT", ambiguous="NaT"
         )
@@ -104,27 +102,45 @@ def clean_str_col(series):
         return s
 
 def agg_summary(df, dims, duration_field):
+    """
+    Group by dims and compute:
+    - Total Calls
+    - Total Duration (hr)  [sum in hours, 2 decimals]
+    - Avg Duration (min)   [mean in minutes, 2 decimals]
+    - Median Duration (min)[median in minutes, 2 decimals]
+    """
     if df.empty:
-        return pd.DataFrame(columns=dims + ["Total Calls", "Total Duration (sec)",
-                                            "Avg Duration (sec)", "Median Duration (sec)"])
-    res = (
+        return pd.DataFrame(
+            columns=dims
+            + ["Total Calls", "Total Duration (hr)",
+               "Avg Duration (min)", "Median Duration (min)"]
+        )
+
+    g = (
         df.groupby(dims, dropna=False)[duration_field]
         .agg(["count", "sum", "mean", "median"])
         .reset_index()
-        .rename(
-            columns={
-                "count": "Total Calls",
-                "sum": "Total Duration (sec)",
-                "mean": "Avg Duration (sec)",
-                "median": "Median Duration (sec)",
-            }
-        )
-        .sort_values(
-            ["Total Calls", "Total Duration (sec)"],
-            ascending=[False, False],
-        )
+        .rename(columns={"count": "Total Calls"})
     )
-    return res
+
+    # Convert seconds → hr / min
+    g["Total Duration (hr)"] = (g["sum"] / 3600).round(2)
+    g["Avg Duration (min)"] = (g["mean"] / 60).round(2)
+    g["Median Duration (min)"] = (g["median"] / 60).round(2)
+
+    # Sort by calls then hours
+    g = g.sort_values(
+        ["Total Calls", "Total Duration (hr)"],
+        ascending=[False, False],
+    )
+
+    # Keep clean columns only
+    g = g[
+        dims
+        + ["Total Calls", "Total Duration (hr)",
+           "Avg Duration (min)", "Median Duration (min)"]
+    ]
+    return g
 
 def download_df(df, filename, label="Download CSV"):
     if df is None or df.empty:
@@ -175,13 +191,15 @@ for col in ["Caller", "Country Name", "Call Type", "Call Status"]:
     if col in df.columns:
         df[col] = clean_str_col(df[col])
 
-df["_duration_sec"] = df["Call Duration"].apply(to_seconds) if "Call Duration" in df.columns else np.nan
+df["_duration_sec"] = (
+    df["Call Duration"].apply(to_seconds)
+    if "Call Duration" in df.columns
+    else np.nan
+)
 
-# robust date
 df["_date_parsed"] = parse_date_best(df["Date"]) if "Date" in df.columns else pd.NaT
 df["_date_only"] = df["_date_parsed"].dt.date
 
-# combined datetime
 if {"Date", "Time"}.issubset(df.columns):
     df["_dt_local"] = combine_date_time(df["Date"], df["Time"])
     df["_hour"] = df["_dt_local"].dt.hour
@@ -189,7 +207,7 @@ else:
     df["_dt_local"] = pd.NaT
     df["_hour"] = np.nan
 
-# figure data range (this is the key fix)
+# Data window based on file (key for "today/yesterday")
 if df["_date_only"].notna().any():
     data_min = df["_date_only"].min()
     data_max = df["_date_only"].max()
@@ -245,7 +263,6 @@ with st.sidebar:
     else:
         custom_dates = None
 
-    # Time within chosen days
     st.caption("Time range within selected dates:")
     t_start = st.time_input("Start time", value=time(0, 0, 0), key="t_start")
     t_end = st.time_input("End time", value=time(23, 59, 59), key="t_end")
@@ -261,7 +278,6 @@ with st.sidebar:
         value=True,
     )
 
-    # dynamic filter selects
     if "Caller" in df.columns:
         agents = sorted(df["Caller"].dropna().astype(str).unique().tolist())
         sel_agents = st.multiselect("Agent(s)", agents, default=agents)
@@ -297,27 +313,25 @@ elif preset == "Yesterday (vs file)":
     start_date = data_max - timedelta(days=1)
     end_date = data_max - timedelta(days=1)
 else:
-    # Custom
     if isinstance(custom_dates, (list, tuple)) and len(custom_dates) == 2:
         start_date, end_date = custom_dates
     else:
         start_date, end_date = data_min, data_max
 
-# clamp to file range
+# clamp inside data range
 if start_date < data_min:
     start_date = data_min
 if end_date > data_max:
     end_date = data_max
-
-# ensure order
 if end_date < start_date:
     end_date = start_date
 
-start_dt = datetime.combine(start_date, t_start).replace(tzinfo=None)
-end_dt = datetime.combine(end_date, t_end).replace(tzinfo=None)
-
-start_dt = pd.Timestamp(start_dt).tz_localize(TZ)
-end_dt = pd.Timestamp(end_dt).tz_localize(TZ)
+start_dt = pd.Timestamp(
+    datetime.combine(start_date, t_start)
+).tz_localize(TZ)
+end_dt = pd.Timestamp(
+    datetime.combine(end_date, t_end)
+).tz_localize(TZ)
 
 df_f = df.copy()
 
@@ -346,6 +360,7 @@ df_f = df_f[final_time_mask].copy()
 # ------------------------------------------------
 # TEAM FILTER
 # ------------------------------------------------
+
 if team_mode == "B2C team only":
     m = mask_for_targets(df_f, "Caller", B2C_TARGETS)
     if include_missing:
@@ -360,6 +375,7 @@ elif team_mode == "MT Team only":
 # ------------------------------------------------
 # COLUMN FILTERS
 # ------------------------------------------------
+
 def apply_filter(frame, col, selections):
     if selections is None or col not in frame.columns:
         return frame
@@ -385,29 +401,31 @@ else:
 # ------------------------------------------------
 # OVERVIEW KPIs
 # ------------------------------------------------
+
 st.subheader("Overview")
 
 if df_view.empty:
     st.warning(
         "No records in the selected filters/date-time window. "
-        "Try expanding the date range (e.g., Today/Yesterday vs file, or full Custom)."
+        "Try expanding the date range or switching presets."
     )
 
 k1, k2, k3, k4 = st.columns(4)
 k1.metric("Total Calls", f"{len(df_view):,}")
-k2.metric(
-    "Avg Duration (sec)",
-    f"{df_view['_duration_sec'].mean():,.1f}"
-    if df_view["_duration_sec"].notna().any()
-    else "NA",
+
+if df_view["_duration_sec"].notna().any():
+    avg_min = (df_view["_duration_sec"].mean() / 60).round(2)
+    med_min = (df_view["_duration_sec"].median() / 60).round(2)
+    k2.metric("Avg Duration (min)", f"{avg_min:,.2f}")
+    k3.metric("Median Duration (min)", f"{med_min:,.2f}")
+else:
+    k2.metric("Avg Duration (min)", "NA")
+    k3.metric("Median Duration (min)", "NA")
+
+k4.metric(
+    "Agents",
+    df_view["Caller"].nunique() if "Caller" in df_view.columns else 0
 )
-k3.metric(
-    "Median Duration (sec)",
-    f"{df_view['_duration_sec'].median():,.1f}"
-    if df_view["_duration_sec"].notna().any()
-    else "NA",
-)
-k4.metric("Agents", df_view["Caller"].nunique() if "Caller" in df_view.columns else 0)
 
 st.caption(
     f"Team: **{team_mode}** | Calls: **{mode}** | "
@@ -418,6 +436,7 @@ st.caption(
 # ------------------------------------------------
 # TABS
 # ------------------------------------------------
+
 tab1, tab2, tab3, tab4 = st.tabs(
     ["Agent-wise", "Country-wise", "Agent × Country", "24h Engagement"]
 )
@@ -438,9 +457,9 @@ with tab1:
                     tooltip=[
                         "Caller",
                         "Total Calls",
-                        "Total Duration (sec)",
-                        "Avg Duration (sec)",
-                        "Median Duration (sec)",
+                        "Total Duration (hr)",
+                        "Avg Duration (min)",
+                        "Median Duration (min)",
                     ],
                 )
                 .properties(height=360)
@@ -466,9 +485,9 @@ with tab2:
                     tooltip=[
                         "Country Name",
                         "Total Calls",
-                        "Total Duration (sec)",
-                        "Avg Duration (sec)",
-                        "Median Duration (sec)",
+                        "Total Duration (hr)",
+                        "Avg Duration (min)",
+                        "Median Duration (min)",
                     ],
                 )
                 .properties(height=360)
@@ -481,7 +500,9 @@ with tab2:
 with tab3:
     st.markdown("### Agent × Country Matrix")
     if {"Caller", "Country Name"}.issubset(df_view.columns):
-        agg = agg_summary(df_view, ["Caller", "Country Name"], "_duration_sec")
+        agg = agg_summary(
+            df_view, ["Caller", "Country Name"], "_duration_sec"
+        )
         st.dataframe(agg, use_container_width=True)
         download_df(agg, "agent_country_matrix.csv")
         if not agg.empty:
@@ -496,7 +517,7 @@ with tab3:
                         "Caller",
                         "Country Name",
                         "Total Calls",
-                        "Total Duration (sec)",
+                        "Total Duration (hr)",
                     ],
                 )
                 .properties(height=380)
@@ -508,18 +529,29 @@ with tab3:
 
 with tab4:
     st.markdown("### 24h Engagement")
-    df_time = df_view.dropna(subset=["_hour"]) if "_hour" in df_view.columns else pd.DataFrame()
+    df_time = (
+        df_view.dropna(subset=["_hour"])
+        if "_hour" in df_view.columns
+        else pd.DataFrame()
+    )
     if not df_time.empty:
         attempts = (
-            df_time.groupby("_hour").size()
+            df_time.groupby("_hour")
+            .size()
             .reset_index(name="Attempts")
             .rename(columns={"_hour": "Hour"})
         )
 
         c1, c2 = st.columns(2)
         with c1:
-            st.dataframe(attempts.sort_values("Hour"), use_container_width=True)
-            download_df(attempts.sort_values("Hour"), "attempts_by_hour.csv")
+            st.dataframe(
+                attempts.sort_values("Hour"),
+                use_container_width=True,
+            )
+            download_df(
+                attempts.sort_values("Hour"),
+                "attempts_by_hour.csv",
+            )
 
         with c2:
             chart = (
@@ -552,14 +584,20 @@ with tab4:
                     x=alt.X("Hour:O"),
                     y=alt.Y("Country Name:N", title="Country"),
                     size=alt.Size("Attempts:Q", legend=None),
-                    tooltip=["Hour:O", "Country Name:N", "Attempts:Q"],
+                    tooltip=[
+                        "Hour:O",
+                        "Country Name:N",
+                        "Attempts:Q",
+                    ],
                 )
                 .properties(height=420)
                 .interactive()
             )
             st.altair_chart(bubble, use_container_width=True)
-            download_df(a2.sort_values(["Country Name", "Hour"]),
-                        "hour_country_bubble.csv")
+            download_df(
+                a2.sort_values(["Country Name", "Hour"]),
+                "hour_country_bubble.csv",
+            )
 
         st.divider()
         if "Caller" in df_time.columns:
@@ -583,12 +621,14 @@ with tab4:
                 .interactive()
             )
             st.altair_chart(heat, use_container_width=True)
-            download_df(hh.sort_values(["Caller", "Hour"]),
-                        "agent_hour_heatmap.csv")
+            download_df(
+                hh.sort_values(["Caller", "Hour"]),
+                "agent_hour_heatmap.csv",
+            )
     else:
         st.info("No valid time data in current filter to show 24h engagement.")
 
 st.caption(
-    "Note: 'Today' and 'Yesterday' are based on the latest date inside calling_DB.csv, "
-    "so you always see live data without touching the code."
+    "Note: 'Today' and 'Yesterday' are based on the latest date inside calling_DB.csv. "
+    "Durations now shown as Total Duration (hr) and Avg/Median Duration (min)."
 )
