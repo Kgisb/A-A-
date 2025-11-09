@@ -105,9 +105,9 @@ def agg_summary(df, dims, duration_field):
     """
     Group by dims and compute:
     - Total Calls
-    - Total Duration (hr)  [sum in hours, 2 decimals]
-    - Avg Duration (min)   [mean in minutes, 2 decimals]
-    - Median Duration (min)[median in minutes, 2 decimals]
+    - Total Duration (hr)     [sum in hours, 2 decimals]
+    - Avg Duration (min)      [mean in minutes, 2 decimals]
+    - Median Duration (min)   [median in minutes, 2 decimals]
     """
     if df.empty:
         return pd.DataFrame(
@@ -123,18 +123,15 @@ def agg_summary(df, dims, duration_field):
         .rename(columns={"count": "Total Calls"})
     )
 
-    # Convert seconds → hr / min
     g["Total Duration (hr)"] = (g["sum"] / 3600).round(2)
     g["Avg Duration (min)"] = (g["mean"] / 60).round(2)
     g["Median Duration (min)"] = (g["median"] / 60).round(2)
 
-    # Sort by calls then hours
     g = g.sort_values(
         ["Total Calls", "Total Duration (hr)"],
         ascending=[False, False],
     )
 
-    # Keep clean columns only
     g = g[
         dims
         + ["Total Calls", "Total Duration (hr)",
@@ -151,6 +148,7 @@ def download_df(df, filename, label="Download CSV"):
 # ------------------------------------------------
 # TEAM DEFINITIONS
 # ------------------------------------------------
+
 B2C_TARGETS_RAW = [
     "Kamaldeep singh",
     "Ria Arora",
@@ -207,7 +205,7 @@ else:
     df["_dt_local"] = pd.NaT
     df["_hour"] = np.nan
 
-# Data window based on file (key for "today/yesterday")
+# Data window based on file
 if df["_date_only"].notna().any():
     data_min = df["_date_only"].min()
     data_max = df["_date_only"].max()
@@ -318,7 +316,7 @@ else:
     else:
         start_date, end_date = data_min, data_max
 
-# clamp inside data range
+# clamp
 if start_date < data_min:
     start_date = data_min
 if end_date > data_max:
@@ -529,12 +527,15 @@ with tab3:
 
 with tab4:
     st.markdown("### 24h Engagement")
+
     df_time = (
         df_view.dropna(subset=["_hour"])
         if "_hour" in df_view.columns
         else pd.DataFrame()
     )
+
     if not df_time.empty:
+        # Attempts by hour (always full)
         attempts = (
             df_time.groupby("_hour")
             .size()
@@ -544,6 +545,7 @@ with tab4:
 
         c1, c2 = st.columns(2)
         with c1:
+            st.markdown("**Attempts by Hour (All)**")
             st.dataframe(
                 attempts.sort_values("Hour"),
                 use_container_width=True,
@@ -569,6 +571,18 @@ with tab4:
             st.altair_chart(chart, use_container_width=True)
 
         st.divider()
+
+        # N selector for Bubble + Heatmap
+        max_attempts = int(df_time.shape[0]) if df_time.shape[0] > 0 else 1
+        n_threshold = st.number_input(
+            "Show only cells with Attempts ≥ N (for Bubble & Heatmap)",
+            min_value=1,
+            max_value=max_attempts,
+            value=1,
+            step=1,
+        )
+
+        # Bubble: Hour × Country (filtered by N)
         if "Country Name" in df_time.columns:
             st.markdown("**Hour × Country (Bubble)**")
             a2 = (
@@ -577,29 +591,36 @@ with tab4:
                 .reset_index(name="Attempts")
                 .rename(columns={"_hour": "Hour"})
             )
-            bubble = (
-                alt.Chart(a2)
-                .mark_circle()
-                .encode(
-                    x=alt.X("Hour:O"),
-                    y=alt.Y("Country Name:N", title="Country"),
-                    size=alt.Size("Attempts:Q", legend=None),
-                    tooltip=[
-                        "Hour:O",
-                        "Country Name:N",
-                        "Attempts:Q",
-                    ],
+            a2 = a2[a2["Attempts"] >= n_threshold]
+
+            if not a2.empty:
+                bubble = (
+                    alt.Chart(a2)
+                    .mark_circle()
+                    .encode(
+                        x=alt.X("Hour:O"),
+                        y=alt.Y("Country Name:N", title="Country"),
+                        size=alt.Size("Attempts:Q", legend=None),
+                        tooltip=[
+                            "Hour:O",
+                            "Country Name:N",
+                            "Attempts:Q",
+                        ],
+                    )
+                    .properties(height=420)
+                    .interactive()
                 )
-                .properties(height=420)
-                .interactive()
-            )
-            st.altair_chart(bubble, use_container_width=True)
-            download_df(
-                a2.sort_values(["Country Name", "Hour"]),
-                "hour_country_bubble.csv",
-            )
+                st.altair_chart(bubble, use_container_width=True)
+                download_df(
+                    a2.sort_values(["Country Name", "Hour"]),
+                    "hour_country_bubble_filtered.csv",
+                )
+            else:
+                st.info("No Hour × Country cells meet the selected N threshold.")
 
         st.divider()
+
+        # Heatmap: Agent × Hour (filtered by N)
         if "Caller" in df_time.columns:
             st.markdown("**Agent × Hour (Heatmap)**")
             hh = (
@@ -608,27 +629,33 @@ with tab4:
                 .reset_index(name="Attempts")
                 .rename(columns={"_hour": "Hour"})
             )
-            heat = (
-                alt.Chart(hh)
-                .mark_rect()
-                .encode(
-                    x=alt.X("Hour:O"),
-                    y=alt.Y("Caller:N", title="Agent"),
-                    color=alt.Color("Attempts:Q"),
-                    tooltip=["Caller", "Hour", "Attempts"],
+            hh = hh[hh["Attempts"] >= n_threshold]
+
+            if not hh.empty:
+                heat = (
+                    alt.Chart(hh)
+                    .mark_rect()
+                    .encode(
+                        x=alt.X("Hour:O"),
+                        y=alt.Y("Caller:N", title="Agent"),
+                        color=alt.Color("Attempts:Q"),
+                        tooltip=["Caller", "Hour", "Attempts"],
+                    )
+                    .properties(height=420)
+                    .interactive()
                 )
-                .properties(height=420)
-                .interactive()
-            )
-            st.altair_chart(heat, use_container_width=True)
-            download_df(
-                hh.sort_values(["Caller", "Hour"]),
-                "agent_hour_heatmap.csv",
-            )
+                st.altair_chart(heat, use_container_width=True)
+                download_df(
+                    hh.sort_values(["Caller", "Hour"]),
+                    "agent_hour_heatmap_filtered.csv",
+                )
+            else:
+                st.info("No Agent × Hour cells meet the selected N threshold.")
     else:
         st.info("No valid time data in current filter to show 24h engagement.")
 
 st.caption(
-    "Note: 'Today' and 'Yesterday' are based on the latest date inside calling_DB.csv. "
-    "Durations now shown as Total Duration (hr) and Avg/Median Duration (min)."
+    "Note: 'Today'/'Yesterday' use the latest date inside calling_DB.csv. "
+    "Durations: Total Duration (hr), Avg/Median Duration (min). "
+    "24h Engagement Bubble & Heatmap respect Attempts ≥ N."
 )
