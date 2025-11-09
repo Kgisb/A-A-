@@ -156,7 +156,7 @@ def download_df(df, filename, label="Download CSV"):
     st.download_button(label, csv, file_name=filename, mime="text/csv")
 
 # ------------------------------------------------
-# TEAM DEFINITIONS (EXACT NAMES, FUZZY MATCHING)
+# TEAM DEFINITIONS (FINAL, WITH FUZZY MATCHING)
 # ------------------------------------------------
 
 # B2C team (exact spelling as provided)
@@ -334,7 +334,7 @@ else:
     else:
         start_date, end_date = data_min, data_max
 
-# clamp
+# clamp to data window
 if start_date < data_min:
     start_date = data_min
 if end_date > data_max:
