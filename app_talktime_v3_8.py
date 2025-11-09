@@ -51,8 +51,10 @@ def combine_date_time(date_col, time_col):
     t_try = pd.to_datetime(time_col, errors="coerce")
     t = t_try.dt.time if hasattr(t_try, "dt") else None
     cat = pd.DataFrame(
-        {"d": d.dt.date.astype(str),
-         "t": pd.Series(t, index=d.index, dtype="object").astype(str)}
+        {
+            "d": d.dt.date.astype(str),
+            "t": pd.Series(t, index=d.index, dtype="object").astype(str),
+        }
     ).agg(" ".join, axis=1)
     dt = pd.to_datetime(cat, errors="coerce")
     try:
@@ -112,8 +114,12 @@ def agg_summary(df, dims, duration_field):
     if df.empty:
         return pd.DataFrame(
             columns=dims
-            + ["Total Calls", "Total Duration (hr)",
-               "Avg Duration (min)", "Median Duration (min)"]
+            + [
+                "Total Calls",
+                "Total Duration (hr)",
+                "Avg Duration (min)",
+                "Median Duration (min)",
+            ]
         )
 
     g = (
@@ -134,8 +140,12 @@ def agg_summary(df, dims, duration_field):
 
     g = g[
         dims
-        + ["Total Calls", "Total Duration (hr)",
-           "Avg Duration (min)", "Median Duration (min)"]
+        + [
+            "Total Calls",
+            "Total Duration (hr)",
+            "Avg Duration (min)",
+            "Median Duration (min)",
+        ]
     ]
     return g
 
@@ -146,25 +156,32 @@ def download_df(df, filename, label="Download CSV"):
     st.download_button(label, csv, file_name=filename, mime="text/csv")
 
 # ------------------------------------------------
-# TEAM DEFINITIONS
+# TEAM DEFINITIONS (UPDATED)
 # ------------------------------------------------
 
+# B2C team
 B2C_TARGETS_RAW = [
-    "Kamaldeep singh",
+    "Aniket Srivastava",
+    "Ankush Kumar",
+    "Jay Nayak",
     "Ria Arora",
+    "Shahbaz Ali",
+    "Ziyaulhaq Badr",
+    "Fuzail Saudagar",
+    "kamaldeep singh",
+    "Unmesh Kamble",
+    "Vikas",
+]
+
+# MT team (only these)
+MT_TARGETS_RAW = [
+    "Niharika Mainali",
+    "Ruhi Sharma",
+    "VISAKHA ...",
+    "TEJAS SINGH",
     "ayushman jetlearn",
     "Shujaat Shafqat",
-    "Unmesh Kamble",
-    "Ziyaulhaq Badr",
-    "Visakha",
-    "Jay Nayak",
-    "Ankush Kumar",
-    "Fuzail Saudagar",
-    "Aniket Srivastava",
-    "Shahbaz Ali",
-    "Vikas Jha",
 ]
-MT_TARGETS_RAW = ["AYUSHMAN"]
 
 B2C_TARGETS = [norm_name(x) for x in B2C_TARGETS_RAW]
 MT_TARGETS = [norm_name(x) for x in MT_TARGETS_RAW]
@@ -498,9 +515,7 @@ with tab2:
 with tab3:
     st.markdown("### Agent × Country Matrix")
     if {"Caller", "Country Name"}.issubset(df_view.columns):
-        agg = agg_summary(
-            df_view, ["Caller", "Country Name"], "_duration_sec"
-        )
+        agg = agg_summary(df_view, ["Caller", "Country Name"], "_duration_sec")
         st.dataframe(agg, use_container_width=True)
         download_df(agg, "agent_country_matrix.csv")
         if not agg.empty:
@@ -582,7 +597,7 @@ with tab4:
             step=1,
         )
 
-        # Bubble: Hour × Country (filtered by N)
+        # Bubble: Hour × Country (filtered)
         if "Country Name" in df_time.columns:
             st.markdown("**Hour × Country (Bubble)**")
             a2 = (
@@ -620,7 +635,7 @@ with tab4:
 
         st.divider()
 
-        # Heatmap: Agent × Hour (filtered by N)
+        # Heatmap: Agent × Hour (filtered)
         if "Caller" in df_time.columns:
             st.markdown("**Agent × Hour (Heatmap)**")
             hh = (
@@ -655,7 +670,7 @@ with tab4:
         st.info("No valid time data in current filter to show 24h engagement.")
 
 st.caption(
-    "Note: 'Today'/'Yesterday' use the latest date inside calling_DB.csv. "
+    "Teams mapped as per latest list. "
     "Durations: Total Duration (hr), Avg/Median Duration (min). "
     "24h Engagement Bubble & Heatmap respect Attempts ≥ N."
 )
