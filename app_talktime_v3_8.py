@@ -8,9 +8,9 @@ from datetime import time, datetime, date, timedelta
 # ------------------------------------------------
 # CONFIG
 # ------------------------------------------------
-APP_TITLE = "📞 TalkTime App — Fixed (Pre-loaded calling_DB.csv)"
+APP_TITLE = "📞 TalkTime App — Pre-loaded calling_DB.csv"
 TZ = "Asia/Kolkata"
-DATA_PATH = "calling_DB.csv"   # keep this CSV beside this script or change path.
+DATA_PATH = "calling_DB.csv"   # ensure this file is in the same directory
 
 st.set_page_config(page_title="TalkTime App", layout="wide")
 
@@ -86,10 +86,13 @@ def fuzzy_match_any(name, targets_norm, ratio_cut=0.85):
     for t in targets_norm:
         if not t:
             continue
+        # direct containment
         if t in n or n in t:
             return True
+        # token-level containment
         if any(tok and tok in n for tok in t.split()):
             return True
+        # similarity ratio
         if SequenceMatcher(None, n, t).ratio() >= ratio_cut:
             return True
     return False
@@ -107,14 +110,13 @@ def agg_summary(df, dims, duration_field):
     """
     Group by dims and compute:
     - Total Calls
-    - Total Duration (hr)     [sum in hours, 2 decimals]
-    - Avg Duration (min)      [mean in minutes, 2 decimals]
-    - Median Duration (min)   [median in minutes, 2 decimals]
+    - Total Duration (hr) [sum in hours, 2 decimals]
+    - Avg Duration (min)  [mean in minutes, 2 decimals]
+    - Median Duration (min)
     """
     if df.empty:
         return pd.DataFrame(
-            columns=dims
-            + [
+            columns=dims + [
                 "Total Calls",
                 "Total Duration (hr)",
                 "Avg Duration (min)",
@@ -139,8 +141,7 @@ def agg_summary(df, dims, duration_field):
     )
 
     g = g[
-        dims
-        + [
+        dims + [
             "Total Calls",
             "Total Duration (hr)",
             "Avg Duration (min)",
@@ -156,10 +157,9 @@ def download_df(df, filename, label="Download CSV"):
     st.download_button(label, csv, file_name=filename, mime="text/csv")
 
 # ------------------------------------------------
-# TEAM DEFINITIONS (FINAL, WITH FUZZY MATCHING)
+# TEAM DEFINITIONS (FINAL, FUZZY)
 # ------------------------------------------------
 
-# B2C team (exact spelling as provided)
 B2C_TARGETS_RAW = [
     "Aniket Srivastava",
     "Ankush Kumar",
@@ -173,7 +173,6 @@ B2C_TARGETS_RAW = [
     "Vikas",
 ]
 
-# MT team (exact spelling as provided)
 MT_TARGETS_RAW = [
     "Niharika Mainali",
     "Ruhi Sharma",
@@ -183,7 +182,6 @@ MT_TARGETS_RAW = [
     "Shujaat Shafqat",
 ]
 
-# Normalized versions used ONLY for fuzzy matching logic
 B2C_TARGETS = [norm_name(x) for x in B2C_TARGETS_RAW]
 MT_TARGETS = [norm_name(x) for x in MT_TARGETS_RAW]
 
@@ -199,7 +197,7 @@ def mask_for_targets(frame, col, targets_norm):
 try:
     df = pd.read_csv(DATA_PATH, low_memory=False)
 except Exception as e:
-    st.error(f"❌ Could not load `{DATA_PATH}`. Please ensure it's present.\n\nError: {e}")
+    st.error(f"❌ Could not load `{DATA_PATH}`. Ensure it is present.\n\nError: {e}")
     st.stop()
 
 # Basic cleaning
@@ -223,7 +221,6 @@ else:
     df["_dt_local"] = pd.NaT
     df["_hour"] = np.nan
 
-# Data window based on file
 if df["_date_only"].notna().any():
     data_min = df["_date_only"].min()
     data_max = df["_date_only"].max()
@@ -319,7 +316,7 @@ with st.sidebar:
         sel_status = None
 
 # ------------------------------------------------
-# DATE + TIME FILTER (USING FILE DATES)
+# DATE + TIME FILTER
 # ------------------------------------------------
 
 if preset == "Today (max file date)":
@@ -334,7 +331,7 @@ else:
     else:
         start_date, end_date = data_min, data_max
 
-# clamp to data window
+# clamp to data range
 if start_date < data_min:
     start_date = data_min
 if end_date > data_max:
@@ -342,12 +339,8 @@ if end_date > data_max:
 if end_date < start_date:
     end_date = start_date
 
-start_dt = pd.Timestamp(
-    datetime.combine(start_date, t_start)
-).tz_localize(TZ)
-end_dt = pd.Timestamp(
-    datetime.combine(end_date, t_end)
-).tz_localize(TZ)
+start_dt = pd.Timestamp(datetime.combine(start_date, t_start)).tz_localize(TZ)
+end_dt = pd.Timestamp(datetime.combine(end_date, t_end)).tz_localize(TZ)
 
 df_f = df.copy()
 
@@ -427,6 +420,7 @@ if df_view.empty:
     )
 
 k1, k2, k3, k4 = st.columns(4)
+
 k1.metric("Total Calls", f"{len(df_view):,}")
 
 if df_view["_duration_sec"].notna().any():
@@ -551,7 +545,7 @@ with tab4:
     )
 
     if not df_time.empty:
-        # Attempts by hour (always full)
+        # Attempts by hour (full)
         attempts = (
             df_time.groupby("_hour")
             .size()
@@ -617,11 +611,7 @@ with tab4:
                         x=alt.X("Hour:O"),
                         y=alt.Y("Country Name:N", title="Country"),
                         size=alt.Size("Attempts:Q", legend=None),
-                        tooltip=[
-                            "Hour:O",
-                            "Country Name:N",
-                            "Attempts:Q",
-                        ],
+                        tooltip=["Hour:O", "Country Name:N", "Attempts:Q"],
                     )
                     .properties(height=420)
                     .interactive()
@@ -673,5 +663,5 @@ with tab4:
 st.caption(
     "Teams use exact names as provided, with fuzzy matching on data values. "
     "Durations: Total Duration (hr), Avg/Median Duration (min). "
-    "24h Engagement Bubble & Heatmap respect Attempts ≥ N."
+    "24h Engagement Bubble & Heatmap show cells with Attempts ≥ N."
 )
